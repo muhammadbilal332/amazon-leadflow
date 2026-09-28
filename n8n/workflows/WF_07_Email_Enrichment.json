@@ -1,0 +1,241 @@
+{
+  "name": "WF_07_Email_Enrichment",
+  "meta": {
+    "description": "Email discovery + verification via Hunter (free tier) or mock, run once per decision-maker item."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "mock",
+              "rightValue": "real",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "options": {
+            "combinator": "and"
+          }
+        }
+      },
+      "name": "Hunter Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hunter.io/v2/email-finder",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "domain",
+              "value": "={{$json.domain}}"
+            },
+            {
+              "name": "first_name",
+              "value": "={{$json.name.split(' ')[0]}}"
+            },
+            {
+              "name": "last_name",
+              "value": "={{$json.name.split(' ').slice(1).join(' ')}}"
+            },
+            {
+              "name": "api_key",
+              "value": "={{$env.HUNTER_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Hunter: Find Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{$response.statusCode}}",
+              "rightValue": 429,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "options": {
+            "combinator": "and"
+          }
+        }
+      },
+      "name": "Quota Exhausted (429)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hunter.io/v2/email-verifier",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{$json.data.email}}"
+            },
+            {
+              "name": "api_key",
+              "value": "={{$env.HUNTER_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Hunter: Verify Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('FREE_QUOTA_EXHAUSTED');\nreturn $input.all();"
+      },
+      "name": "Fallback: Mock Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const dm = $json; if (!dm.domain) return { json: { email: null, status: 'NOT_CHECKED', verifiedAt: null } };\nconst [first, ...rest] = dm.name.trim().toLowerCase().split(/\\s+/);\nconst local = `${first}.${rest.join('') || 'team'}`;\nconst cycle = ['VALID','ACCEPT_ALL','UNKNOWN']; const status = cycle[dm.name.length % 3];\nreturn { json: { email: `${local}@${dm.domain}`, status, verifiedAt: (status==='VALID')? new Date().toISOString(): null } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Generate Mock Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "Hunter Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hunter Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Hunter: Find Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Mock Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hunter: Find Email": {
+      "main": [
+        [
+          {
+            "node": "Quota Exhausted (429)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quota Exhausted (429)?": {
+      "main": [
+        [
+          {
+            "node": "Fallback: Mock Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hunter: Verify Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback: Mock Email": {
+      "main": [
+        [
+          {
+            "node": "Generate Mock Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

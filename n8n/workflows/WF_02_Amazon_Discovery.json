@@ -1,0 +1,97 @@
+{
+  "name": "WF_02_Amazon_Discovery",
+  "meta": {
+    "description": "Given { brandName, marketplace }, delegates entirely to the app-side POST /api/providers/amazon/search endpoint, which runs amazonProviderChain() (Playwright / SerpApi / mock — selected via AMAZON_PROVIDER) and returns the normalized DiscoveredProduct[] contract. A local Code-node fallback regenerates the same deterministic mock catalog only if the app endpoint itself is unreachable."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/providers/amazon/search",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { brandName: $json.brandName, marketplace: $json.marketplace } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "App: Amazon Discovery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Delegates entirely to the app's configured Amazon provider (Playwright,\n// SerpApi, or mock — selected via AMAZON_PROVIDER, see lib/providers/registry.ts).\n// This workflow never needs to know which one actually ran.\nconst resp = $input.first().json;\nif (resp && resp.status === 'SUCCESS' && Array.isArray(resp.products) && resp.products.length > 0) {\n  return resp.products.map((p) => ({ json: p }));\n}\n\n// Local safety-net only — fires if the app endpoint itself was\n// unreachable (the app's own provider chain already falls back to mock\n// internally, so this path is rare). Matches lib/providers/amazon/mock.ts.\nconsole.log('APP_AMAZON_PROVIDER_UNREACHABLE_OR_EMPTY');\nconst ctx = $('Start (called by WF_01)').first().json;\nconst brand = ctx.brandName;\nconst marketplace = ctx.marketplace;\nconst count = 2 + (brand.length % 3);\nconst out = [];\nfor (let i = 0; i < count; i++) {\n  const asin = 'B0' + brand.replace(/[^A-Z0-9]/gi,'').toUpperCase().padEnd(6,'X').slice(0,6) + i;\n  out.push({ json: {\n    asin, title: `${brand} Premium Kit ${i+1}`, brandLabel: brand, sellerName: brand, sellerCount: 1,\n    price: 19.99 + i * 7.5, currency: 'USD', rating: 4.2, reviewCount: 120 + i * 50,\n    url: `https://www.${marketplace}/dp/${asin}`,\n    bulletPoints: ['PREMIUM MATERIALS', 'EASY TO USE', `${brand.toUpperCase()} QUALITY`],\n    description: `The ${brand} product line built for everyday reliability.`,\n    images: [{ url: `https://m.media-amazon.com/images/mock/${asin}-1.jpg`, position: 0, isMain: true }],\n  }});\n}\nreturn out;"
+      },
+      "name": "Handle Discovery Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "App: Amazon Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App: Amazon Discovery": {
+      "main": [
+        [
+          {
+            "node": "Handle Discovery Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

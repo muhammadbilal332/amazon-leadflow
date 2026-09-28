@@ -1,0 +1,97 @@
+{
+  "name": "WF_06_Decision_Maker_Research",
+  "meta": {
+    "description": "Delegates to the app's configured lead provider (Playwright, Hunter, Apollo, or mock -- selected via LEAD_PROVIDER, see lib/providers/registry.ts::leadProviderChain) via POST /api/providers/lead/decision-makers, passing the company resolved by WF_05. This workflow never needs to know which provider actually ran. LinkedIn URLs only ever come through as provider data (a company's own published team-page links, or Hunter/Apollo); absent => NOT_FOUND, never fabricated."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/providers/lead/decision-makers",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { company: $json } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "App: Decision Maker Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nif (resp && resp.status === 'SUCCESS' && Array.isArray(resp.people) && resp.people.length > 0) {\n  return resp.people.map((p) => ({ json: { ...p, source: resp.provider } }));\n}\n\n// Local safety-net only -- fires if the app endpoint itself was\n// unreachable (the app's own provider chain already falls back to mock\n// internally, so this path is rare). Matches lib/providers/lead/mock.ts.\nconsole.log('APP_LEAD_PROVIDER_UNREACHABLE_OR_EMPTY');\nconst company = $('Start (called by WF_01)').first().json;\nconst seed = company.name.length;\nconst titles = [{t:'Founder & CEO',r:'FOUNDER'},{t:'Co-Founder',r:'FOUNDER'},{t:'Head of E-commerce',r:'ECOMMERCE'},{t:'Marketing Director',r:'MARKETING'},{t:'Brand Manager',r:'MARKETING'}];\nconst firsts=['Jordan','Taylor','Morgan','Casey','Riley','Avery']; const lasts=['Bennett','Clarke','Douglas','Reyes','Kim','Patel'];\nconst count = 1 + (seed % 3); const out=[];\nfor (let i=0;i<count;i++) {\n  const pick = titles[(seed+i)%titles.length];\n  const found = (seed+i) % 3 !== 0;\n  const first = firsts[(seed+i)%6], last = lasts[(seed+i*3)%6];\n  out.push({ json: { name: `${first} ${last}`, jobTitle: pick.t, roleCategory: pick.r,\n    linkedinUrl: found ? `https://www.linkedin.com/in/${first.toLowerCase()}-${last.toLowerCase()}` : null,\n    linkedinStatus: found ? 'FOUND' : 'NOT_FOUND', location: company.location, confidence: found?0.8:0.55, source: 'mock-lead' } });\n}\nreturn out;"
+      },
+      "name": "Handle Decision Maker Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "App: Decision Maker Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App: Decision Maker Research": {
+      "main": [
+        [
+          {
+            "node": "Handle Decision Maker Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

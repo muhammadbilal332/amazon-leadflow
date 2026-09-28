@@ -1,0 +1,178 @@
+{
+  "name": "WF_04_Amazon_Listing_Audit",
+  "meta": {
+    "description": "Deterministic component scoring + optional AI component commentary + issue generation, run once per product item (mode: runOnceForEachItem). Mirrors lib/scoring.ts and lib/issues.ts."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json;\nconst clamp = n => Math.max(0, Math.min(100, n));\n\nlet title = 40;\nif (p.title.length >= 80 && p.title.length <= 200) title += 25; else if (p.title.length >= 40) title += 12;\nconst words = p.title.trim().split(/\\s+/).filter(Boolean).length;\nif (words >= 8) title += 15; else if (words >= 5) title += 8;\nif (p.title.toLowerCase().includes((p.brandName||'').toLowerCase())) title += 10;\nif (/\\d/.test(p.title)) title += 10;\ntitle = clamp(title);\n\nconst bullets = p.bulletPoints.length === 0 ? 0 : clamp(20 + Math.min(p.bulletPoints.length,5)*10 + (p.bulletPoints.some(b=>/benefit|help|easy|comfort|durable|quality/i.test(b)) ? 10 : 0));\nconst description = !p.description ? 0 : clamp(20 + (p.description.length>=400?35:p.description.length>=150?20:0) + (/guarantee|warranty|certified|satisfaction/i.test(p.description)?15:0) + (/use|care|instructions|maintain/i.test(p.description)?15:0));\nconst images = (p.images||[]).length === 0 ? 0 : clamp(10 + 15 + Math.min(p.images.length,7)*6);\nconst conversion = clamp(15 + (p.rating>=4.5?25:p.rating>=4.0?18:p.rating>=3.5?8:0) + (p.reviewCount>=500?20:p.reviewCount>=100?14:p.reviewCount>=20?6:0) + (/guarantee|warranty|certified/i.test(p.description||'')?20:0));\nconst competition = clamp(40 + 20);\nconst seo = Math.round((title*0.4 + bullets*0.35 + description*0.25)*100)/100;\nconst overall = Math.round((seo*0.25 + title*0.10 + bullets*0.10 + description*0.05 + images*0.25 + conversion*0.15 + competition*0.10)*100)/100;\n\nreturn { json: { ...p, scores: { seo, title, bullets, description, images, conversion, competition }, overall_score: overall } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Compute Deterministic Scores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "mock",
+              "rightValue": "real",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "options": {
+            "combinator": "and"
+          }
+        }
+      },
+      "name": "AI Provider Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.AI_API_KEY}}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "jsonBody": "={{ { model: 'claude-sonnet-5', max_tokens: 1024, messages: [{ role: 'user', content: 'Return ONLY JSON assessing this Amazon listing: ' + JSON.stringify({ title: $json.title, bulletPoints: $json.bulletPoints, description: $json.description }) }] } }}"
+      },
+      "name": "AI: Component Assessment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { ...$json, aiSummary: null } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Skip AI (mock/demo)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json; const s = p.scores; const issues = [];\nif (s.images === 0) issues.push({ category:'IMAGES', severity:'CRITICAL', title:'No product images found', description:'This listing has no images on record.', evidence: 'image count = 0', recommendation:'Upload at least 6 images including a main, infographic, and lifestyle shot.', confidence: 0.95 });\nif (s.title < 50) issues.push({ category:'TITLE', severity: s.title<30?'HIGH':'MEDIUM', title:'Title is not optimized', description:`Title scored ${s.title}/100.`, evidence: `title = \"${p.title}\"`, recommendation:'Front-load keywords and include the brand name within 150-200 characters.', confidence: 0.75 });\nif (s.bullets < 50) issues.push({ category:'BULLETS', severity: p.bulletPoints.length===0?'CRITICAL':'MEDIUM', title: p.bulletPoints.length===0?'No bullet points found':'Bullets lack benefit language', description:`Bullets scored ${s.bullets}/100.`, evidence: (p.bulletPoints||[]).join(' | ') || 'no bullet points', recommendation:'Use all 5 bullet slots with benefit-first, capitalized leads.', confidence: 0.75 });\nif (s.description < 50) issues.push({ category:'DESCRIPTION', severity: !p.description?'HIGH':'MEDIUM', title: !p.description?'No product description found':'Description is thin or missing structure', description:`Description scored ${s.description}/100.`, evidence: p.description ? p.description.slice(0,140) : 'no description', recommendation:'Expand the description to 400+ characters and mention warranty/guarantee details.', confidence: 0.7 });\nif (s.conversion < 50) issues.push({ category:'CONVERSION', severity:'MEDIUM', title:'Weak conversion signals', description:`Conversion scored ${s.conversion}/100.`, evidence: `rating=${p.rating ?? 'n/a'}, reviews=${p.reviewCount ?? 0}`, recommendation:'Highlight differentiation and add explicit trust signals.', confidence: 0.65 });\nif (s.seo < 50) issues.push({ category:'SEO', severity:'MEDIUM', title:'Keyword coverage appears limited', description:`SEO scored ${s.seo}/100.`, evidence: 'derived from title/bullet/description component scores', recommendation:'Run a keyword gap analysis against top competitors.', confidence: 0.6 });\nreturn { json: { ...p, issues } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Generate Listing Issues",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "Compute Deterministic Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Deterministic Scores": {
+      "main": [
+        [
+          {
+            "node": "AI Provider Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Provider Enabled?": {
+      "main": [
+        [
+          {
+            "node": "AI: Component Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip AI (mock/demo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI: Component Assessment": {
+      "main": [
+        [
+          {
+            "node": "Generate Listing Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip AI (mock/demo)": {
+      "main": [
+        [
+          {
+            "node": "Generate Listing Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

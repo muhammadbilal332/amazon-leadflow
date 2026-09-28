@@ -1,0 +1,38 @@
+version: "3.8"
+
+# Local-only stack for n8n. Supabase itself is run via `supabase start`
+# (the Supabase CLI manages its own Docker Compose project) — see
+# docs/SETUP.md. Nothing here requires a paid plan or credit card.
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: amazon-leadflow-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=changeme
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      # App-facing safety switches, mirrored from .env.local so n8n workflows
+      # can read the same DEMO_MODE / PAID_APIS_ENABLED gates as the Next.js app.
+      - DEMO_MODE=${DEMO_MODE:-true}
+      - PAID_APIS_ENABLED=${PAID_APIS_ENABLED:-false}
+      - APP_BASE_URL=${APP_BASE_URL:-http://host.docker.internal:3000}
+      - N8N_WEBHOOK_SECRET=${N8N_WEBHOOK_SECRET:-}
+      - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY:-}
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - APOLLO_API_KEY=${APOLLO_API_KEY:-}
+      - AI_API_KEY=${AI_API_KEY:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows-import:ro
+
+volumes:
+  n8n_data:

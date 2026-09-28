@@ -1,0 +1,723 @@
+{
+  "name": "WF_01_Brand_Lead_Orchestrator",
+  "meta": {
+    "description": "Entry point. Validates { jobId, brandId, clientId, brandName, marketplace } from POST /webhook/brand-lead-orchestrator, then threads a single running 'context' object through WF_02–WF_08 via Code nodes (Build Context / Merge* / Prep*), reporting progress to POST /api/n8n/webhook after key stages. Verified end-to-end against a live Supabase project in DEMO_MODE (mock providers only)."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "path": "brand-lead-orchestrator",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      },
+      "name": "Webhook: Start Job",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.body.jobId}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "leftValue": "={{$json.body.brandName}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/n8n/webhook",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "progress"
+            },
+            {
+              "name": "jobId",
+              "value": "={{$json.body.jobId}}"
+            },
+            {
+              "name": "status",
+              "value": "RUNNING"
+            },
+            {
+              "name": "progress",
+              "value": 5
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Report: RUNNING",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const trigger = $('Webhook: Start Job').first().json.body;\nreturn [{ json: {\n  jobId: trigger.jobId, brandId: trigger.brandId, clientId: trigger.clientId,\n  brandName: trigger.brandName, marketplace: trigger.marketplace || 'amazon.com',\n} }];"
+      },
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ScZ7p83z6msafet9",
+          "mode": "list",
+          "cachedResultName": "WF_02_Amazon_Discovery"
+        },
+        "options": {}
+      },
+      "name": "Run: Amazon Discovery",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Context').first().json;\nconst products = $input.all().map(i => i.json);\nreturn [{ json: { ...ctx, products } }];"
+      },
+      "name": "Merge Products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nreturn (ctx.products||[]).map(p => ({ json: { ...p, brandName: ctx.brandName } }));"
+      },
+      "name": "Enrich Products With BrandName",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "YKTAY80wtP4tb5lD",
+          "mode": "list",
+          "cachedResultName": "WF_03_Private_Label_Verification"
+        },
+        "options": {}
+      },
+      "name": "Run: Private Label Verification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Merge Products').first().json;\nconst classification = $input.first().json;\nreturn [{ json: { ...ctx, classification } }];"
+      },
+      "name": "Merge Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Enrich Products With BrandName').all();"
+      },
+      "name": "Prep Audit Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "KwwCTY7kkhApDKny",
+          "mode": "list",
+          "cachedResultName": "WF_04_Amazon_Listing_Audit"
+        },
+        "options": {}
+      },
+      "name": "Run: Listing Audit",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Merge Classification').first().json;\nconst audits = $input.all().map(i => ({ asin: i.json.asin, scores: i.json.scores, overall_score: i.json.overall_score, issues: i.json.issues || [] }));\nreturn [{ json: { ...ctx, audits } }];"
+      },
+      "name": "Merge Audits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "AoJpGQbndrRxu2uM",
+          "mode": "list",
+          "cachedResultName": "WF_05_Company_Research"
+        },
+        "options": {}
+      },
+      "name": "Run: Company Research",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2640,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Merge Audits').first().json;\nconst company = $input.first().json;\nreturn [{ json: { ...ctx, company } }];"
+      },
+      "name": "Merge Company",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json.company }];"
+      },
+      "name": "Prep Company For DM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "alyDwaXL08bViuxO",
+          "mode": "list",
+          "cachedResultName": "WF_06_Decision_Maker_Research"
+        },
+        "options": {}
+      },
+      "name": "Run: Decision Maker Research",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3300,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Merge Company').first().json;\nconst decisionMakers = $input.all().map(i => i.json);\nreturn [{ json: { ...ctx, decisionMakers } }];"
+      },
+      "name": "Merge Decision Makers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nreturn (ctx.decisionMakers||[]).map(dm => ({ json: { ...dm, domain: ctx.company?.domain ?? null } }));"
+      },
+      "name": "Prep DM Items For Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "Wr99T4TcHSkXp1cs",
+          "mode": "list",
+          "cachedResultName": "WF_07_Email_Enrichment"
+        },
+        "options": {}
+      },
+      "name": "Run: Email Enrichment",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3960,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Merge Decision Makers').first().json;\nconst contactResults = $input.all().map(i => i.json);\nconst decisionMakers = (ctx.decisionMakers||[]).map((dm, i) => ({\n  ...dm,\n  email: contactResults[i]?.email ?? null,\n  emailStatus: contactResults[i]?.status ?? 'NOT_CHECKED',\n  emailVerifiedAt: contactResults[i]?.verifiedAt ?? null,\n}));\nreturn [{ json: { ...ctx, decisionMakers } }];"
+      },
+      "name": "Merge Contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "Fsvh0AK9TyjF1wG7",
+          "mode": "list",
+          "cachedResultName": "WF_08_Save_To_Supabase"
+        },
+        "options": {}
+      },
+      "name": "Run: Save To Supabase",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4400,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/n8n/webhook",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "complete"
+            },
+            {
+              "name": "jobId",
+              "value": "={{$('Webhook: Start Job').first().json.body.jobId}}"
+            },
+            {
+              "name": "partial",
+              "value": false
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Report: COMPLETED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4620,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/n8n/webhook",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "error"
+            },
+            {
+              "name": "jobId",
+              "value": "={{$json.body.jobId}}"
+            },
+            {
+              "name": "workflow",
+              "value": "WF_01_Brand_Lead_Orchestrator"
+            },
+            {
+              "name": "step",
+              "value": "validate_input"
+            },
+            {
+              "name": "message",
+              "value": "jobId or brandName missing from trigger payload"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Report: Validation Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: Start Job": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Report: RUNNING",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report: Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report: RUNNING": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Run: Amazon Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Amazon Discovery": {
+      "main": [
+        [
+          {
+            "node": "Merge Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Products": {
+      "main": [
+        [
+          {
+            "node": "Enrich Products With BrandName",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Products With BrandName": {
+      "main": [
+        [
+          {
+            "node": "Run: Private Label Verification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Private Label Verification": {
+      "main": [
+        [
+          {
+            "node": "Merge Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Classification": {
+      "main": [
+        [
+          {
+            "node": "Prep Audit Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Audit Items": {
+      "main": [
+        [
+          {
+            "node": "Run: Listing Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Listing Audit": {
+      "main": [
+        [
+          {
+            "node": "Merge Audits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Audits": {
+      "main": [
+        [
+          {
+            "node": "Run: Company Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Company Research": {
+      "main": [
+        [
+          {
+            "node": "Merge Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Company": {
+      "main": [
+        [
+          {
+            "node": "Prep Company For DM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Company For DM": {
+      "main": [
+        [
+          {
+            "node": "Run: Decision Maker Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Decision Maker Research": {
+      "main": [
+        [
+          {
+            "node": "Merge Decision Makers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Decision Makers": {
+      "main": [
+        [
+          {
+            "node": "Prep DM Items For Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep DM Items For Email": {
+      "main": [
+        [
+          {
+            "node": "Run: Email Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Email Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Merge Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Contacts": {
+      "main": [
+        [
+          {
+            "node": "Run: Save To Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Save To Supabase": {
+      "main": [
+        [
+          {
+            "node": "Report: COMPLETED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

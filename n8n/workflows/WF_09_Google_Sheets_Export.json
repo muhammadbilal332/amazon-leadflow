@@ -1,0 +1,104 @@
+{
+  "name": "WF_09_Google_Sheets_Export",
+  "meta": {
+    "description": "Exports one row per (product, decision maker) pair to Google Sheets, or returns GOOGLE_SHEETS_NOT_CONFIGURED."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "path": "export-google-sheets",
+        "httpMethod": "POST",
+        "responseMode": "lastNode"
+      },
+      "name": "Webhook: Export Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{$env.GOOGLE_CLIENT_ID}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "leftValue": "={{$env.GOOGLE_CLIENT_SECRET}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "leftValue": "={{$env.GOOGLE_REFRESH_TOKEN}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "options": {
+            "combinator": "and"
+          }
+        }
+      },
+      "name": "Google Sheets Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { status: 'GOOGLE_SHEETS_NOT_CONFIGURED' } }];"
+      },
+      "name": "Return: Not Configured",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook: Export Request": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Configured?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Return: Not Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

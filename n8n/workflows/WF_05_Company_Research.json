@@ -1,0 +1,97 @@
+{
+  "name": "WF_05_Company_Research",
+  "meta": {
+    "description": "Delegates to the app's configured lead provider (Playwright, Hunter, Apollo, or mock — selected via LEAD_PROVIDER, see lib/providers/registry.ts::leadProviderChain) via POST /api/providers/lead/company. This workflow never needs to know which one actually ran; a deterministic mock fallback only fires if that endpoint is unreachable."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:3000/api/providers/lead/company",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { brandName: $json.brandName } }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "App: Company Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QUkqfx1ZyjjX0FnE",
+          "name": "LeadFlow n8n Webhook Secret (header)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nif (resp && resp.status === 'SUCCESS' && resp.company) {\n  return [{ json: { ...resp.company, source: resp.provider } }];\n}\n\n// Local safety-net only -- fires if the app endpoint itself was\n// unreachable (the app's own provider chain already falls back to mock\n// internally, so this path is rare). Matches lib/providers/lead/mock.ts.\nconsole.log('APP_LEAD_PROVIDER_UNREACHABLE_OR_EMPTY');\nconst brand = $('Start (called by WF_01)').first().json.brandName;\nconst domain = brand.trim().toLowerCase().replace(/[^a-z0-9]+/g,'') + '.com';\nreturn [{ json: {\n  name: `${brand} Inc.`, domain, website: `https://www.${domain}`,\n  description: `${brand} designs and sells consumer products, with a growing presence on Amazon.`,\n  employeeRange: ['1-10','11-50','51-200'][brand.length % 3],\n  location: ['Austin, TX','Brooklyn, NY','Los Angeles, CA','Chicago, IL'][brand.length % 4],\n  source: 'mock-lead',\n} }];"
+      },
+      "name": "Handle Company Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "App: Company Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App: Company Research": {
+      "main": [
+        [
+          {
+            "node": "Handle Company Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

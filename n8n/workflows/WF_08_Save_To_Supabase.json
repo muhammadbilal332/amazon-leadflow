@@ -1,0 +1,491 @@
+{
+  "name": "WF_08_Save_To_Supabase",
+  "meta": {
+    "description": "Persists the full run context (products, classification, audits+issues, company, decision makers+contacts) into Supabase via PostgREST, upserting on the natural keys from supabase/migrations/0001_init.sql and 0003_listing_issues_idempotency.sql so retries never duplicate rows. Auth: Supabase requires BOTH an `apikey` header (gateway routing) and an `Authorization: Bearer <service-role-key>` header (what PostgREST reads to assume service_role and bypass RLS) — apikey alone is not sufficient."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nconst rows = (ctx.products||[]).map(p => ({\n  brand_id: ctx.brandId, job_id: ctx.jobId, asin: p.asin, title: p.title,\n  brand_label: p.brandLabel, seller_name: p.sellerName, seller_count: p.sellerCount,\n  price: p.price, currency: p.currency, rating: p.rating, review_count: p.reviewCount,\n  url: p.url, bullet_points: p.bulletPoints, description: p.description,\n  classification: ctx.classification?.classification ?? 'UNKNOWN',\n  classification_confidence: ctx.classification?.confidence ?? 0,\n  classification_evidence: ctx.classification?.evidence ?? {},\n}));\nreturn [{ json: { rows } }];"
+      },
+      "name": "Map Product Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/amazon_products?on_conflict=brand_id,asin",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: amazon_products",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Start (called by WF_01)').first().json;\nconst productRows = $input.all().map(i => i.json);\nconst byAsin = Object.fromEntries(productRows.map(r => [r.asin, r.id]));\nconst issuesByAsin = Object.fromEntries((ctx.audits||[]).map(a => [a.asin, a.issues||[]]));\nconst rows = (ctx.audits||[]).filter(a => byAsin[a.asin]).map(a => ({\n  product_id: byAsin[a.asin],\n  overall_score: a.overall_score,\n  seo_score: a.scores.seo, title_score: a.scores.title, bullet_score: a.scores.bullets,\n  description_score: a.scores.description, image_score: a.scores.images,\n  conversion_score: a.scores.conversion, competition_score: a.scores.competition,\n}));\nreturn [{ json: { rows, issuesByAsin, byAsin } }];"
+      },
+      "name": "Map Audit Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/listing_audits?on_conflict=product_id",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: listing_audits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const mapNode = $('Map Audit Rows').first().json;\nconst auditRows = $input.all().map(i => i.json);\nconst productIdToAsin = Object.fromEntries(Object.entries(mapNode.byAsin).map(([asin,id])=>[id,asin]));\nconst rows = [];\nfor (const audit of auditRows) {\n  const asin = productIdToAsin[audit.product_id];\n  const issues = mapNode.issuesByAsin[asin] || [];\n  for (const issue of issues) {\n    rows.push({\n      audit_id: audit.id, category: issue.category, severity: issue.severity,\n      title: issue.title, description: issue.description, evidence: issue.evidence ?? null,\n      recommendation: issue.recommendation, source: 'n8n-deterministic-audit', confidence: issue.confidence ?? 0.7,\n    });\n  }\n}\nreturn [{ json: { rows } }];"
+      },
+      "name": "Map Issue Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/listing_issues?on_conflict=audit_id,category",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: listing_issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json;\nconst c = ctx.company || {};\nreturn [{ json: { rows: [{\n  brand_id: ctx.brandId, name: c.name, domain: c.domain, website: c.website,\n  description: c.description, employee_range: c.employeeRange, location: c.location,\n  source: c.source || 'n8n',\n  linkedin_url: c.linkedinUrl ?? null, industry: c.industry ?? null, founded_year: c.foundedYear ?? null,\n  contact_url: c.contactUrl ?? null, public_business_email: c.publicBusinessEmail ?? null, public_business_phone: c.publicBusinessPhone ?? null,\n}] } }];"
+      },
+      "name": "Map Company Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/companies?on_conflict=brand_id,domain",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: companies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Start (called by WF_01)').first().json;\nconst companyRow = $input.first().json;\nconst rows = (ctx.decisionMakers||[]).map(dm => ({\n  company_id: companyRow.id, name: dm.name, job_title: dm.jobTitle, role_category: dm.roleCategory,\n  linkedin_url: dm.linkedinUrl, linkedin_status: dm.linkedinStatus, location: dm.location,\n  source: dm.source || 'n8n', confidence: dm.confidence ?? 0.5, headline: dm.headline ?? null,\n}));\nreturn [{ json: { rows } }];"
+      },
+      "name": "Map Decision Maker Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/decision_makers?on_conflict=company_id,name,job_title",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: decision_makers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Start (called by WF_01)').first().json;\nconst dmRows = $input.all().map(i => i.json);\nconst rows = dmRows.map(dmRow => {\n  const original = (ctx.decisionMakers||[]).find(dm => dm.name === dmRow.name && dm.jobTitle === dmRow.job_title);\n  return {\n    decision_maker_id: dmRow.id,\n    email: original?.email ?? null,\n    email_status: original?.emailStatus ?? 'NOT_CHECKED',\n    email_verified_at: original?.emailVerifiedAt ?? null,\n    source: (original && original.source) || 'n8n',\n  };\n});\nreturn [{ json: { rows } }];"
+      },
+      "name": "Map Contact Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://czqlkwciifncrpjzapqm.supabase.co/rest/v1/contacts?on_conflict=decision_maker_id",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            },
+            {
+              "name": "apikey",
+              "value": "REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY_AFTER_IMPORT"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.rows}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "name": "Upsert: contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bYBnamELmFTWPorn",
+          "name": "Supabase Service Role (Authorization Bearer)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "Map Product Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Map Company Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Product Rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert: amazon_products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert: amazon_products": {
+      "main": [
+        [
+          {
+            "node": "Map Audit Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Audit Rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert: listing_audits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert: listing_audits": {
+      "main": [
+        [
+          {
+            "node": "Map Issue Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Issue Rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert: listing_issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Company Row": {
+      "main": [
+        [
+          {
+            "node": "Upsert: companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert: companies": {
+      "main": [
+        [
+          {
+            "node": "Map Decision Maker Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Decision Maker Rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert: decision_makers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert: decision_makers": {
+      "main": [
+        [
+          {
+            "node": "Map Contact Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Contact Rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert: contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

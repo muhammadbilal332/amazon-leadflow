@@ -1,0 +1,46 @@
+{
+  "name": "WF_03_Private_Label_Verification",
+  "meta": {
+    "description": "Deterministic private-label classification (mirrors lib/classification.ts). Runs once for all N product items passed in by WF_01, each item pre-merged with brandName."
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start (called by WF_01)",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const products = $input.all().map(i => i.json);\nconst brand = ($('Start (called by WF_01)').first().json.brandName || '').trim().toLowerCase();\nconst catalogSize = products.length;\nif (catalogSize === 0) return [{ json: { classification: 'UNKNOWN', confidence: 0, evidence: { catalogSize: 0 } } }];\n\nconst brandLabelMatches = products.filter(p => (p.brandLabel||'').trim().toLowerCase() === brand).length;\nconst brandConsistency = brandLabelMatches / catalogSize >= 0.8;\nconst avgSellerCount = products.reduce((s,p)=>s+(p.sellerCount??1),0) / catalogSize;\nconst singleSellerDominant = avgSellerCount <= 1.3;\nconst sellerNameMatches = products.filter(p => (p.sellerName||'').trim().toLowerCase().includes(brand)).length;\nconst brandNameMatchesSellerName = sellerNameMatches / catalogSize >= 0.5;\nconst repeatedBrandedProducts = catalogSize >= 3 && brandConsistency;\nconst evidence = { brandConsistency, singleSellerDominant, sellerCountAcrossCatalog: Math.round(avgSellerCount*100)/100, catalogSize, brandNameMatchesSellerName, repeatedBrandedProducts };\nconst positiveSignals = [brandConsistency, singleSellerDominant, brandNameMatchesSellerName, repeatedBrandedProducts].filter(Boolean).length;\n\nlet classification, confidence;\nif (!singleSellerDominant && avgSellerCount >= 3) { classification='LIKELY_RESELLER'; confidence=0.75; }\nelse if (!singleSellerDominant && avgSellerCount >= 2) { classification='WHOLESALE'; confidence=0.55; }\nelse if (positiveSignals >= 3) { classification='LIKELY_PRIVATE_LABEL'; confidence=0.85; }\nelse if (positiveSignals === 2) { classification='POSSIBLE_PRIVATE_LABEL'; confidence=0.6; }\nelse { classification='UNKNOWN'; confidence=0.3; }\n\nreturn [{ json: { classification, confidence, evidence } }];"
+      },
+      "name": "Classify Brand (deterministic)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start (called by WF_01)": {
+      "main": [
+        [
+          {
+            "node": "Classify Brand (deterministic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
